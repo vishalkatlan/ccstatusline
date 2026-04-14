@@ -55695,7 +55695,7 @@ function renderPowerlineStatusLine(widgets, settings, context, lineIndex = 0, gl
     }
     if (widgetText) {
       const padding = settings.defaultPadding ?? "";
-      if (settings.overrideForegroundColor && settings.overrideForegroundColor !== "none" && widget.type === "custom-command" && widget.preserveColors) {
+      if (settings.overrideForegroundColor && settings.overrideForegroundColor !== "none" && widget.preserveColors) {
         widgetText = stripSgrCodes(widgetText);
       }
       const prevItem = i > 0 ? filteredWidgets[i - 1] : null;
@@ -55707,7 +55707,7 @@ function renderPowerlineStatusLine(widgets, settings, context, lineIndex = 0, gl
       const paddedText = `${leadingPadding}${widgetText}${trailingPadding}`;
       let fgColor = widget.color ?? defaultColor;
       let bgColor = widget.backgroundColor;
-      const skipFgTheme = widget.type === "custom-command" && widget.preserveColors;
+      const skipFgTheme = widget.preserveColors === true;
       if (themeColors) {
         if (!skipFgTheme) {
           fgColor = themeColors.fg[widgetColorIndex % themeColors.fg.length] ?? fgColor;
@@ -55783,7 +55783,7 @@ function renderPowerlineStatusLine(widgets, settings, context, lineIndex = 0, gl
     const shouldBold = settings.globalBold || widget.widget.bold;
     const needsSeparator = i < widgetElements.length - 1 && separators.length > 0 && nextWidget && !widget.widget.merge;
     let widgetContent = "";
-    const isPreserveColors = widget.widget.type === "custom-command" && widget.widget.preserveColors;
+    const isPreserveColors = widget.widget.preserveColors === true;
     if (shouldBold && !isPreserveColors) {
       widgetContent += "\x1B[1m";
     }
@@ -56050,7 +56050,7 @@ function renderStatusLine(widgets, settings, context, preRenderedWidgets, preCal
         }
       }
       if (widgetText) {
-        if (widget.type === "custom-command" && widget.preserveColors) {
+        if (widget.preserveColors) {
           let finalOutput = widgetText;
           if (widget.maxWidth && widget.maxWidth > 0) {
             const plainLength = getVisibleWidth(widgetText);
@@ -64142,6 +64142,215 @@ class GitWorktreeOriginalBranchWidget {
   }
 }
 
+// src/utils/nested-repos.ts
+import { execFileSync as execFileSync3 } from "child_process";
+import { readdirSync as readdirSync2 } from "fs";
+import path9 from "path";
+function isGitRepo(dirPath, deps) {
+  try {
+    const result = deps.execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+      cwd: dirPath,
+      timeout: 5000
+    }).trim();
+    return result === "true";
+  } catch {
+    return false;
+  }
+}
+function discoverNestedRepos(cwd2, deps = DEFAULT_DEPS) {
+  if (isGitRepo(cwd2, deps)) {
+    return [];
+  }
+  let entries;
+  try {
+    entries = deps.readdirSync(cwd2, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const dirs = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).slice(0, MAX_SCAN_DIRS);
+  const repos = [];
+  for (const dir of dirs) {
+    const dirPath = path9.join(cwd2, dir.name);
+    if (isGitRepo(dirPath, deps)) {
+      repos.push({ name: dir.name, path: dirPath });
+    }
+  }
+  return repos.sort((a, b) => a.name.localeCompare(b.name));
+}
+var MAX_SCAN_DIRS = 20, DEFAULT_DEPS;
+var init_nested_repos = __esm(() => {
+  DEFAULT_DEPS = {
+    execFileSync: execFileSync3,
+    readdirSync: readdirSync2
+  };
+});
+
+// src/widgets/GitWorkspace.ts
+function coloredChanges(label, value, isZero) {
+  const colored = isZero ? source_default.dim(value) : source_default.red(value);
+  return `${source_default.dim(label)}${colored}`;
+}
+function formatPr(pr) {
+  const num = renderOsc8Link(pr.url, `#${pr.number}`);
+  const status = getExtendedPrStatusLabel(pr.state, pr.reviewDecision, pr.mergeable);
+  const base2 = pr.baseRefName.length > 0 ? `${source_default.dim("→")}${source_default.dim(shortenBranch(pr.baseRefName))}` : "";
+  let statusColor;
+  switch (status) {
+    case "MERGED":
+      statusColor = source_default.magenta(status);
+      break;
+    case "CLOSED":
+      statusColor = source_default.red(status);
+      break;
+    case "CONFLICT":
+      statusColor = source_default.red(status);
+      break;
+    case "APPROVED":
+      statusColor = source_default.green(status);
+      break;
+    case "REVIEW":
+      statusColor = source_default.cyan(status);
+      break;
+    case "CHANGES_REQ":
+      statusColor = source_default.yellow(status);
+      break;
+    default:
+      statusColor = source_default.dim(status);
+      break;
+  }
+  return `${num}${base2} ${statusColor}`;
+}
+function buildRepoLine(info) {
+  const parts = [];
+  if (info.repoName !== null) {
+    parts.push(source_default.cyan(info.repoName));
+  }
+  let branchText = `⎇ ${info.branch}`;
+  if (info.remoteUrl) {
+    const baseUrl = parseGitHubBaseUrl(info.remoteUrl);
+    if (baseUrl) {
+      branchText = renderOsc8Link(`${baseUrl}/tree/${encodeGitRefForUrlPath(info.branch)}`, branchText);
+    }
+  }
+  parts.push(source_default.magenta(branchText));
+  const stagedZero = info.staged === "+0,-0";
+  parts.push(coloredChanges("S(", info.staged, stagedZero) + source_default.dim(")"));
+  const unstagedZero = info.unstaged === "+0,-0";
+  parts.push(coloredChanges("U(", info.unstaged, unstagedZero) + source_default.dim(")"));
+  const untrackedText = `?:${info.untracked}`;
+  parts.push(info.untracked === 0 ? source_default.dim(untrackedText) : source_default.yellow(untrackedText));
+  if (info.conflicts) {
+    parts.push(source_default.red("!CONFLICTS"));
+  }
+  if (info.prs.length > 0) {
+    const prParts = info.prs.map((pr) => formatPr(pr));
+    parts.push(source_default.dim("|"));
+    parts.push(prParts.join(` ${source_default.dim("|")} `));
+  }
+  return parts.join(" ");
+}
+function collectStagedUnstaged(context) {
+  const stagedStat = runGit("diff --cached --shortstat", context) ?? "";
+  const unstagedStat = runGit("diff --shortstat", context) ?? "";
+  const parseShortStat = (stat) => {
+    const insertMatch = /(\d+)\s+insertions?/.exec(stat);
+    const deleteMatch = /(\d+)\s+deletions?/.exec(stat);
+    const ins = insertMatch?.[1] ? parseInt(insertMatch[1], 10) : 0;
+    const del = deleteMatch?.[1] ? parseInt(deleteMatch[1], 10) : 0;
+    return `+${ins},-${del}`;
+  };
+  return {
+    staged: parseShortStat(stagedStat),
+    unstaged: parseShortStat(unstagedStat)
+  };
+}
+function collectRepoInfoFull(cwd2, context, repoName) {
+  const branch = runGit("branch --show-current", context) ?? "detached";
+  const { staged, unstaged } = collectStagedUnstaged(context);
+  const status = getGitStatus(context);
+  const remoteUrl = runGit("remote get-url origin", context);
+  const prs = fetchPrListData(cwd2) ?? [];
+  const untrackedOutput = runGit("ls-files --others --exclude-standard", context);
+  const untracked = untrackedOutput ? untrackedOutput.split(`
+`).filter((l) => l.length > 0).length : 0;
+  return {
+    repoName,
+    branch,
+    staged,
+    unstaged,
+    untracked,
+    conflicts: status.conflicts,
+    prs,
+    remoteUrl
+  };
+}
+
+class GitWorkspaceWidget {
+  getDefaultColor() {
+    return "white";
+  }
+  getDescription() {
+    return "Multi-line git workspace overview (one line per repo with branch, status, PRs)";
+  }
+  getDisplayName() {
+    return "Git Workspace";
+  }
+  getCategory() {
+    return "Git";
+  }
+  getEditorDisplay(_item) {
+    return { displayText: this.getDisplayName() };
+  }
+  render(_item, context, _settings) {
+    if (context.isPreview) {
+      return [
+        `${source_default.cyan("frontend")} ${source_default.magenta("⎇ main")} ${source_default.dim("S(+0,-0)")} ${source_default.dim("U(+0,-0)")} ${source_default.dim("?:0")}`,
+        `${source_default.cyan("backend")} ${source_default.magenta("⎇ feat/api")} ${source_default.dim("S(")}${source_default.red("+5,-2")}${source_default.dim(")")} ${source_default.dim("U(+0,-0)")} ${source_default.yellow("?:1")} ${source_default.dim("|")} #42 ${source_default.green("APPROVED")}`
+      ].join(`
+`);
+    }
+    const cwd2 = resolveGitCwd(context);
+    if (!cwd2) {
+      return null;
+    }
+    if (isInsideGitWorkTree(context)) {
+      const info = collectRepoInfoFull(cwd2, context, null);
+      return buildRepoLine(info);
+    }
+    const repos = discoverNestedRepos(cwd2);
+    if (repos.length === 0) {
+      return null;
+    }
+    const lines = [];
+    for (const repo of repos) {
+      clearGitCache();
+      const repoContext = {
+        ...context,
+        data: { ...context.data, cwd: repo.path }
+      };
+      const info = collectRepoInfoFull(repo.path, repoContext, repo.name);
+      lines.push(buildRepoLine(info));
+    }
+    return lines.join(`
+`);
+  }
+  supportsRawValue() {
+    return false;
+  }
+  supportsColors(_item) {
+    return false;
+  }
+}
+var init_GitWorkspace = __esm(() => {
+  init_source();
+  init_gh_pr_cache();
+  init_git();
+  init_hyperlink();
+  init_nested_repos();
+});
+
 // src/widgets/index.ts
 var init_widgets = __esm(async () => {
   init_GitBranch();
@@ -64193,6 +64402,7 @@ var init_widgets = __esm(async () => {
   await init_Skills();
   init_ThinkingEffort();
   init_VimMode();
+  init_GitWorkspace();
 });
 
 // src/utils/widget-manifest.ts
@@ -64258,7 +64468,8 @@ var init_widget_manifest = __esm(async () => {
     { type: "worktree-mode", create: () => new GitWorktreeModeWidget },
     { type: "worktree-name", create: () => new GitWorktreeNameWidget },
     { type: "worktree-branch", create: () => new GitWorktreeBranchWidget },
-    { type: "worktree-original-branch", create: () => new GitWorktreeOriginalBranchWidget }
+    { type: "worktree-original-branch", create: () => new GitWorktreeOriginalBranchWidget },
+    { type: "git-workspace", create: () => new GitWorkspaceWidget }
   ];
   LAYOUT_WIDGET_MANIFEST = [
     {
@@ -64621,9 +64832,9 @@ var init_hooks = __esm(async () => {
 // src/utils/config.ts
 import * as fs10 from "fs";
 import * as os8 from "os";
-import * as path9 from "path";
+import * as path10 from "path";
 function initConfigPath(filePath) {
-  settingsPath = filePath ? path9.resolve(filePath) : DEFAULT_SETTINGS_PATH;
+  settingsPath = filePath ? path10.resolve(filePath) : DEFAULT_SETTINGS_PATH;
 }
 function getConfigPath() {
   return settingsPath;
@@ -64632,13 +64843,13 @@ function isCustomConfigPath() {
   return settingsPath !== DEFAULT_SETTINGS_PATH;
 }
 function getSettingsPaths() {
-  const configDir = path9.dirname(settingsPath);
-  const parsedPath = path9.parse(settingsPath);
+  const configDir = path10.dirname(settingsPath);
+  const parsedPath = path10.parse(settingsPath);
   const backupBaseName = parsedPath.ext ? `${parsedPath.name}.bak` : `${parsedPath.base}.bak`;
   return {
     configDir,
     settingsPath,
-    settingsBackupPath: path9.join(configDir, backupBaseName)
+    settingsBackupPath: path10.join(configDir, backupBaseName)
   };
 }
 async function writeSettingsJson(settings, paths) {
@@ -64730,7 +64941,7 @@ var init_config = __esm(() => {
   readFile3 = fs10.promises.readFile;
   writeFile = fs10.promises.writeFile;
   mkdir = fs10.promises.mkdir;
-  DEFAULT_SETTINGS_PATH = path9.join(os8.homedir(), ".config", "ccstatusline", "settings.json");
+  DEFAULT_SETTINGS_PATH = path10.join(os8.homedir(), ".config", "ccstatusline", "settings.json");
   settingsPath = DEFAULT_SETTINGS_PATH;
 });
 
@@ -64738,7 +64949,7 @@ var init_config = __esm(() => {
 import { execSync as execSync5 } from "child_process";
 import * as fs11 from "fs";
 import * as os9 from "os";
-import * as path10 from "path";
+import * as path11 from "path";
 function isKnownCommand(command) {
   const prefixes = [CCSTATUSLINE_COMMANDS.NPM, CCSTATUSLINE_COMMANDS.BUNX, CCSTATUSLINE_COMMANDS.SELF_MANAGED];
   return prefixes.some((prefix) => command === prefix || command.startsWith(`${prefix} --config `));
@@ -64762,7 +64973,7 @@ function getClaudeConfigDir() {
   const envConfigDir = process.env.CLAUDE_CONFIG_DIR;
   if (envConfigDir) {
     try {
-      const resolvedPath = path10.resolve(envConfigDir);
+      const resolvedPath = path11.resolve(envConfigDir);
       if (fs11.existsSync(resolvedPath)) {
         const stats = fs11.statSync(resolvedPath);
         if (stats.isDirectory()) {
@@ -64773,10 +64984,10 @@ function getClaudeConfigDir() {
       }
     } catch {}
   }
-  return path10.join(os9.homedir(), ".claude");
+  return path11.join(os9.homedir(), ".claude");
 }
 function getClaudeSettingsPath() {
-  return path10.join(getClaudeConfigDir(), "settings.json");
+  return path11.join(getClaudeConfigDir(), "settings.json");
 }
 async function backupClaudeSettings(suffix = ".bak") {
   const settingsPath2 = getClaudeSettingsPath();
@@ -64826,7 +65037,7 @@ async function loadClaudeSettings(options = {}) {
 }
 async function saveClaudeSettings(settings) {
   const settingsPath2 = getClaudeSettingsPath();
-  const dir = path10.dirname(settingsPath2);
+  const dir = path11.dirname(settingsPath2);
   await backupClaudeSettings();
   await mkdir2(dir, { recursive: true });
   await writeFile2(settingsPath2, JSON.stringify(settings, null, 2), "utf-8");
@@ -65610,7 +65821,7 @@ function openExternalUrl(url2) {
 import { execSync as execSync6 } from "child_process";
 import * as fs12 from "fs";
 import * as os11 from "os";
-import * as path11 from "path";
+import * as path12 from "path";
 var fontsInstalledThisSession = false;
 function checkPowerlineFonts() {
   if (process.env.DEBUG_FONT_INSTALL === "1" && !fontsInstalledThisSession) {
@@ -65630,20 +65841,20 @@ function checkPowerlineFonts() {
     let fontPaths = [];
     if (platform4 === "darwin") {
       fontPaths = [
-        path11.join(os11.homedir(), "Library", "Fonts"),
+        path12.join(os11.homedir(), "Library", "Fonts"),
         "/Library/Fonts",
         "/System/Library/Fonts"
       ];
     } else if (platform4 === "linux") {
       fontPaths = [
-        path11.join(os11.homedir(), ".local", "share", "fonts"),
-        path11.join(os11.homedir(), ".fonts"),
+        path12.join(os11.homedir(), ".local", "share", "fonts"),
+        path12.join(os11.homedir(), ".fonts"),
         "/usr/share/fonts",
         "/usr/local/share/fonts"
       ];
     } else if (platform4 === "win32") {
       fontPaths = [
-        path11.join(os11.homedir(), "AppData", "Local", "Microsoft", "Windows", "Fonts"),
+        path12.join(os11.homedir(), "AppData", "Local", "Microsoft", "Windows", "Fonts"),
         "C:\\Windows\\Fonts"
       ];
     }
@@ -65722,11 +65933,11 @@ async function installPowerlineFonts() {
     const platform4 = os11.platform();
     let fontDir;
     if (platform4 === "darwin") {
-      fontDir = path11.join(os11.homedir(), "Library", "Fonts");
+      fontDir = path12.join(os11.homedir(), "Library", "Fonts");
     } else if (platform4 === "linux") {
-      fontDir = path11.join(os11.homedir(), ".local", "share", "fonts");
+      fontDir = path12.join(os11.homedir(), ".local", "share", "fonts");
     } else if (platform4 === "win32") {
-      fontDir = path11.join(os11.homedir(), "AppData", "Local", "Microsoft", "Windows", "Fonts");
+      fontDir = path12.join(os11.homedir(), "AppData", "Local", "Microsoft", "Windows", "Fonts");
     } else {
       return {
         success: false,
@@ -65736,7 +65947,7 @@ async function installPowerlineFonts() {
     if (!fs12.existsSync(fontDir)) {
       fs12.mkdirSync(fontDir, { recursive: true });
     }
-    const tempDir = path11.join(os11.tmpdir(), `ccstatusline-powerline-fonts-${Date.now()}`);
+    const tempDir = path12.join(os11.tmpdir(), `ccstatusline-powerline-fonts-${Date.now()}`);
     try {
       if (fs12.existsSync(tempDir)) {
         fs12.rmSync(tempDir, { recursive: true, force: true });
@@ -65746,7 +65957,7 @@ async function installPowerlineFonts() {
         encoding: "utf8"
       });
       if (platform4 === "darwin" || platform4 === "linux") {
-        const installScript = path11.join(tempDir, "install.sh");
+        const installScript = path12.join(tempDir, "install.sh");
         if (fs12.existsSync(installScript)) {
           fs12.chmodSync(installScript, 493);
           execSync6(`cd "${tempDir}" && ./install.sh`, {
@@ -65776,7 +65987,7 @@ async function installPowerlineFonts() {
         let findFontFiles = function(dir) {
           const files = fs12.readdirSync(dir);
           for (const file2 of files) {
-            const filePath = path11.join(dir, file2);
+            const filePath = path12.join(dir, file2);
             const stat = fs12.statSync(filePath);
             if (stat.isDirectory() && !file2.startsWith(".")) {
               findFontFiles(filePath);
@@ -65791,8 +66002,8 @@ async function installPowerlineFonts() {
         findFontFiles(tempDir);
         let installedCount = 0;
         for (const fontFile of fontFiles) {
-          const fileName = path11.basename(fontFile);
-          const destPath = path11.join(fontDir, fileName);
+          const fileName = path12.basename(fontFile);
+          const destPath = path12.join(fontDir, fileName);
           try {
             fs12.copyFileSync(fontFile, destPath);
             installedCount++;
@@ -70823,51 +71034,7 @@ init_colors();
 init_config();
 init_git();
 init_jsonl();
-
-// src/utils/nested-repos.ts
-import { execFileSync as execFileSync3 } from "child_process";
-import { readdirSync as readdirSync3 } from "fs";
-import path12 from "path";
-var MAX_SCAN_DIRS = 20;
-var DEFAULT_DEPS = {
-  execFileSync: execFileSync3,
-  readdirSync: readdirSync3
-};
-function isGitRepo(dirPath, deps) {
-  try {
-    const result = deps.execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "ignore"],
-      cwd: dirPath,
-      timeout: 5000
-    }).trim();
-    return result === "true";
-  } catch {
-    return false;
-  }
-}
-function discoverNestedRepos(cwd2, deps = DEFAULT_DEPS) {
-  if (isGitRepo(cwd2, deps)) {
-    return [];
-  }
-  let entries;
-  try {
-    entries = deps.readdirSync(cwd2, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const dirs = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).slice(0, MAX_SCAN_DIRS);
-  const repos = [];
-  for (const dir of dirs) {
-    const dirPath = path12.join(cwd2, dir.name);
-    if (isGitRepo(dirPath, deps)) {
-      repos.push({ name: dir.name, path: dirPath });
-    }
-  }
-  return repos.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-// src/ccstatusline.ts
+init_nested_repos();
 await init_renderer2();
 
 // src/utils/skills.ts
