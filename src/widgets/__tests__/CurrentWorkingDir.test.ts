@@ -33,7 +33,7 @@ describe('CurrentWorkingDirWidget', () => {
     });
 
     const defaultSettings: Settings = {
-        version: 3,
+        version: 4,
         lines: [],
         flexMode: 'full',
         compactThreshold: 60,
@@ -42,6 +42,7 @@ describe('CurrentWorkingDirWidget', () => {
         inheritSeparatorColors: false,
         globalBold: false,
         minimalistMode: false,
+        nestedRepos: false,
         powerline: {
             enabled: false,
             separators: [],

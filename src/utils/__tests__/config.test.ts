@@ -155,7 +155,7 @@ describe('config utilities', () => {
             updatemessage?: { message?: string };
         };
         expect(migrated.version).toBe(CURRENT_VERSION);
-        expect(migrated.updatemessage?.message).toContain('v2.0.2');
+        expect(migrated.updatemessage?.message).toContain('nested repos');
         expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 

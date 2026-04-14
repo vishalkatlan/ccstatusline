@@ -170,6 +170,20 @@ export const migrations: Migration[] = [
 
             return migrated;
         }
+    },
+    {
+        fromVersion: 3,
+        toVersion: 4,
+        description: 'Migrate from v3 to v4',
+        migrate: (data) => {
+            const migrated: Record<string, unknown> = { ...data };
+            migrated.version = 4;
+            migrated.updatemessage = {
+                message: 'ccstatusline updated: nested repos support added. Set nestedRepos: true in settings.',
+                remaining: 12
+            };
+            return migrated;
+        }
     }
 ];
 

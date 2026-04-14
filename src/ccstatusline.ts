@@ -17,11 +17,13 @@ import {
     loadSettings,
     saveSettings
 } from './utils/config';
+import { clearGitCache } from './utils/git';
 import {
     getSessionDuration,
     getSpeedMetricsCollection,
     getTokenMetrics
 } from './utils/jsonl';
+import { discoverNestedRepos } from './utils/nested-repos';
 import { advanceGlobalPowerlineThemeIndex } from './utils/powerline-theme-index';
 import {
     calculateMaxWidthsFromPreRendered,
@@ -141,8 +143,8 @@ async function renderMultipleLines(data: StatusJSON) {
         skillsMetrics = getSkillsMetrics(data.session_id);
     }
 
-    // Create render context
-    const context: RenderContext = {
+    // Create base render context
+    const baseContext: RenderContext = {
         data,
         tokenMetrics,
         speedMetrics,
@@ -154,39 +156,65 @@ async function renderMultipleLines(data: StatusJSON) {
         minimalist: settings.minimalistMode
     };
 
-    // Always pre-render all widgets once (for efficiency)
-    const preRenderedLines = preRenderAllWidgets(lines, settings, context);
-    const preCalculatedMaxWidths = calculateMaxWidthsFromPreRendered(preRenderedLines, settings);
+    // Determine which contexts to render (single or multi-repo)
+    const resolvedCwd = data.cwd ?? data.workspace?.current_dir ?? data.workspace?.project_dir;
+    const nestedRepos = settings.nestedRepos && resolvedCwd
+        ? discoverNestedRepos(resolvedCwd)
+        : [];
 
-    // Render each line using pre-rendered content
+    // Use nested repos only when enabled, cwd is not itself a git repo, and repos were found
+    const useNestedRepos = settings.nestedRepos
+        && nestedRepos.length > 0
+        && resolvedCwd !== undefined;
+
+    const renderContexts: RenderContext[] = useNestedRepos
+        ? nestedRepos.map(repo => ({
+            ...baseContext,
+            data: { ...data, cwd: repo.path }
+        }))
+        : [baseContext];
+
     let globalSeparatorIndex = 0;
     let globalPowerlineThemeIndex = 0;
-    for (let i = 0; i < lines.length; i++) {
-        const lineItems = lines[i];
-        if (lineItems && lineItems.length > 0) {
-            const preRenderedWidgets = preRenderedLines[i] ?? [];
-            const lineContext = {
-                ...context,
-                lineIndex: i,
-                globalSeparatorIndex,
-                globalPowerlineThemeIndex
-            };
-            const line = renderStatusLine(lineItems, settings, lineContext, preRenderedWidgets, preCalculatedMaxWidths);
+    let isFirstBlock = true;
 
-            // Only output the line if it has content (not just ANSI codes)
-            // Strip ANSI codes to check if there's actual text
-            const strippedLine = getVisibleText(line).trim();
-            if (strippedLine.length > 0) {
-                // Replace all spaces with non-breaking spaces to prevent VSCode trimming
-                let outputLine = line.replace(/ /g, '\u00A0');
+    for (const context of renderContexts) {
+        // Clear git cache between repos so commands run against the correct cwd
+        if (useNestedRepos) {
+            clearGitCache();
+        }
 
-                // Add reset code at the beginning to override Claude Code's dim setting
-                outputLine = '\x1b[0m' + outputLine;
-                console.log(outputLine);
+        const preRenderedLines = preRenderAllWidgets(lines, settings, context);
+        const preCalculatedMaxWidths = calculateMaxWidthsFromPreRendered(preRenderedLines, settings);
 
-                globalSeparatorIndex = advanceGlobalSeparatorIndex(globalSeparatorIndex, lineItems);
-                if (settings.powerline.enabled && settings.powerline.continueThemeAcrossLines) {
-                    globalPowerlineThemeIndex = advanceGlobalPowerlineThemeIndex(globalPowerlineThemeIndex, preRenderedWidgets);
+        // Add blank line separator between repo blocks
+        if (useNestedRepos && !isFirstBlock) {
+            console.log('');
+        }
+        isFirstBlock = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            const lineItems = lines[i];
+            if (lineItems && lineItems.length > 0) {
+                const preRenderedWidgets = preRenderedLines[i] ?? [];
+                const lineContext = {
+                    ...context,
+                    lineIndex: i,
+                    globalSeparatorIndex,
+                    globalPowerlineThemeIndex
+                };
+                const line = renderStatusLine(lineItems, settings, lineContext, preRenderedWidgets, preCalculatedMaxWidths);
+
+                const strippedLine = getVisibleText(line).trim();
+                if (strippedLine.length > 0) {
+                    let outputLine = line.replace(/ /g, '\u00A0');
+                    outputLine = '\x1b[0m' + outputLine;
+                    console.log(outputLine);
+
+                    globalSeparatorIndex = advanceGlobalSeparatorIndex(globalSeparatorIndex, lineItems);
+                    if (settings.powerline.enabled && settings.powerline.continueThemeAcrossLines) {
+                        globalPowerlineThemeIndex = advanceGlobalPowerlineThemeIndex(globalPowerlineThemeIndex, preRenderedWidgets);
+                    }
                 }
             }
         }
